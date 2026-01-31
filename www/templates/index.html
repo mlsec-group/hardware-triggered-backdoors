@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Scheduler Status</title>
+
+    <style>
+        #workers-overview,
+        #jobs-overview {
+            display: flex;
+            flex-direction: column;
+            border: 1px solid #000;
+        }
+
+        .split {
+            display: flex;
+            flex-direction: row;
+        }
+
+        .tile-view {
+            flex: 1;
+        }
+
+        .tile-view .tiles {
+            display: flex;
+            flex: 1;
+            flex-wrap: wrap;
+        }
+
+        .tile-view .tile {
+            flex-direction: column;
+            display: flex;
+            border: 1px solid #000;
+        }
+
+        .progress-bar {
+            width: 100%;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Status page for server running at {{ hostname }}:{{ port }}</h1>
+
+    <div id="total-progress">
+
+    </div>
+
+    <div id="workers-overview">
+
+    </div>
+
+    <div id="jobs-overview">
+
+    </div>
+
+    <div id="backend-overview">
+
+    </div>
+
+    <div>
+        <img src="/heatmap.png">
+        <img src="/heatmap_interpolated.png">
+    </div>
+
+    <pre><code>{% for line in success_rate %}{{line}}{% endfor %}</code></pre>
+
+    <script src="/static/js/main.js"></script>
+</body>
+
+</html>

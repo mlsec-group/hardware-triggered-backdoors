@@ -1,0 +1,48 @@
+Bootstrap: docker
+From: ubuntu:24.04
+
+%environment
+    export VIRTUAL_ENV="/app/venv"
+    export PATH="$VIRTUAL_ENV/bin:$PATH"
+    export PYTHONPATH="$VIRTUAL_ENV/lib/python3.12/site-packages:$PYTHONPATH"
+
+%post
+    export VIRTUAL_ENV="/app/venv"
+    export PATH="$VIRTUAL_ENV/bin:$PATH"
+    export PYTHONPATH="$VIRTUAL_ENV/lib/python3.12/site-packages:$PYTHONPATH"
+
+    apt-get update && apt-get install -y \
+        build-essential \
+        ccache \
+        cmake \
+        curl \
+        g++ \
+        gcc \
+        gfortran \
+        git \
+        llvm \
+        make \
+        python3 \
+        python3-pip \
+        python3-venv
+
+    mkdir -p /app
+    cd /app/
+    python3 -m venv venv
+
+    pip3 install numpy pyyaml typing_extensions ninja pillow tqdm matplotlib torch==2.5.1 torchvision==0.20.1 nvidia-dali-cuda120
+
+    apt-get remove -y \
+        build-essential \
+        ccache \
+        cmake \
+        curl \
+        g++ \
+        gcc \
+        gfortran \
+        llvm \
+        make \
+        python3-pip \
+        python3-venv \
+        vim
+    python3 -c "import torch; print(torch.__config__.show())"
