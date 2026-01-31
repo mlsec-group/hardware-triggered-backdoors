@@ -1,0 +1,19 @@
+FROM ubuntu@sha256:adbb90115a21969d2fe6fa7f9af4253e16d45f8d4c1e930182610c4731962658
+
+RUN apt-get update -y && \
+    apt-get install -y python3-pip python3 docker.io
+
+RUN pip install torch==2.5.1 \
+    torchvision \
+    seaborn \
+    numpy \
+    matplotlib \
+    tqdm \
+    pillow \
+    Flask \
+    tensorboard
+
+RUN apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+WORKDIR /app
