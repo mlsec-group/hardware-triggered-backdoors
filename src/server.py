@@ -13,10 +13,6 @@ from typing import Dict
 
 import torch
 import torch.nn as nn
-from jobscheduler.client import Client, ClientConfig
-from jobscheduler.monitor import MonitorServer
-from jobscheduler.progresstracker import ProgressTracker
-from jobscheduler.scheduler import Scheduler
 from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
 from torchvision.models.efficientnet import EfficientNet, FusedMBConv, MBConv
 from torchvision.models.resnet import BasicBlock, ResNet
@@ -31,9 +27,14 @@ from torchvision.ops.stochastic_depth import StochasticDepth
 
 from common.random_names import generate_run_name
 from common.util import load_dir_config
+from jobscheduler.client import Client, ClientConfig
+from jobscheduler.monitor import MonitorServer
+from jobscheduler.progresstracker import ProgressTracker
+from jobscheduler.scheduler import Scheduler
 from scheduler.clients_manager import ClientsManager
 from strategies.server.backdoor.strategy import BackdoorServer
 from strategies.server.backdoor_defense.strategy import BackdoorDefenseServer
+from strategies.server.example.strategy import ExampleServer
 from strategies.server_strategy import ServerStrategy
 
 
@@ -135,6 +136,7 @@ def main():
         for c in [
             BackdoorServer,
             BackdoorDefenseServer,
+            ExampleServer,
         ]
     }
 

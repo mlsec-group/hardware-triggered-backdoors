@@ -9,6 +9,7 @@ import sys
 
 from strategies.server_cli.backdoor import BackdoorCLI
 from strategies.server_cli.backdoor_defense import BackdoorDefenseCLI
+from strategies.server_cli.example import ExampleCLI
 
 
 def get_git_commit():
@@ -180,6 +181,7 @@ def main():
         for c in [
             BackdoorCLI,
             BackdoorDefenseCLI,
+            ExampleCLI,
         ]
     }
 
