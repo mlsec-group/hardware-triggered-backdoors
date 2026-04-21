@@ -20,7 +20,6 @@ from torch.utils.data import DataLoader
 N_STEPS_FOR_IMAGENET = 195
 
 
-
 @dataclass
 class TrainerRunState:
     model: torch.nn.Module
@@ -70,7 +69,8 @@ class BackdoorDefenseClient(ClientStrategy):
         model.eval()
 
         evaluator = ImageNetAccuracyEvaluator(
-            os.path.join(self.config_dataset_dir, self.dataset, "val_set")
+            os.path.join(self.config_dataset_dir, self.dataset, "val_set"),
+            random_shuffle=True,
         )
         tqdm_bar = tqdm.tqdm(
             desc="Accuracy",
@@ -84,7 +84,7 @@ class BackdoorDefenseClient(ClientStrategy):
         while True:
             try:
                 i, batch = next(it)
-                if i == N_STEPS_FOR_IMAGENET:
+                if i >= N_STEPS_FOR_IMAGENET:
                     break
             except StopIteration:
                 break

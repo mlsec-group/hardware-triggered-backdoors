@@ -109,8 +109,8 @@ def permute_model(model, generator: torch.Generator, model_device: torch.device)
     return permutations
 
 
-def flip_bits(param_list, bit_flip_tripples):
-    for layer_idx, weight_idx, bit_idx in bit_flip_tripples:
+def flip_bits(param_list, bit_flip_record):
+    for layer_idx, weight_idx, bit_idx in bit_flip_record:
         param = param_list[layer_idx]
         param_flat = param.view(-1)
 
@@ -182,7 +182,7 @@ class BackdoorClient(ClientStrategy):
 
         else:
             self.model_device = torch.device("cpu")
-            assert False
+            # assert False
         torch.set_default_device(self.model_device)
 
         self.run_state: Dict[str, RunState] = {}
@@ -457,6 +457,7 @@ class BackdoorClient(ClientStrategy):
         self,
         run_id: str,
         *,
+        bit_flip_try_ids: List[int],
         bit_flip_records: List[torch.Tensor],
         model_hashes: List[bytes],
         use_full_model: bool,
@@ -472,8 +473,8 @@ class BackdoorClient(ClientStrategy):
         # ]
 
         # (3)
-        for candidate_id, (bit_flip_record, model_hash) in enumerate(
-            zip(bit_flip_records, model_hashes)
+        for bit_flip_try_id, bit_flip_record, model_hash in zip(
+            bit_flip_try_ids, bit_flip_records, model_hashes
         ):
             bit_flip_record = bit_flip_record.to(torch.int32)
             param_list = [
@@ -511,7 +512,7 @@ class BackdoorClient(ClientStrategy):
             if accuracy >= accuracy_bound:
                 return hash_tensor(), {
                     "success": True,
-                    "candidate_id": candidate_id,
+                    "bit_flip_try_id": bit_flip_try_id,
                     "accuracy": accuracy,
                 }
 

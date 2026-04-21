@@ -120,7 +120,7 @@ class BackdoorDefenseJob(Job):
             worker.worker_init(*self.get_client_args())
 
     def run(self, worker_group: Dict[str, Worker]):
-        trainer_worker = get_trainer_worker(worker_group)
+        trainer_name, trainer_worker = get_trainer_worker(worker_group)
         tester_workers = worker_group
 
         os.makedirs(self.output_dir, exist_ok=True)

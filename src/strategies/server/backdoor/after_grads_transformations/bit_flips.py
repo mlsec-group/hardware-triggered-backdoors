@@ -3,28 +3,19 @@ import functools
 import io
 import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import torch
 from jobscheduler.worker import Worker
 
 from common.util import hash_tensor
 from strategies.server.backdoor.after_grads_transformations.util import (
+    BitFlipOutput,
     all_different,
     one_vs_all,
 )
 from strategies.server.backdoor.logging import GradientLogger
 from strategies.server.backdoor.util import EMPTY_HASH, get_relevant_parameters
-
-
-@dataclass
-class BitFlipOutput:
-    # (n_tries, n_samples, n_classes)
-    predictions: torch.Tensor
-    # (n_tries, n_bits_flipped, 3)
-    bit_flip_records: torch.Tensor
-    # (n_tries, )
-    model_hashes: List[bytes]
 
 
 class BitFlipStrategy:
@@ -116,11 +107,13 @@ class BitFlipStrategy:
         assert len(model_hashes) == 1
         assert len(client_hashes) == 1
 
-        return worker_outputs, list(model_hashes)[0]
+        model_hash = list(model_hashes)[0]
+
+        return worker_outputs, model_hash
 
     @torch.inference_mode()
-    def flip_bits(self, param_list: List[torch.nn.Parameter], bit_flip_tripples):
-        for layer_idx, weight_idx, bit_idx in bit_flip_tripples:
+    def flip_bits(self, param_list: List[torch.nn.Parameter], bit_flip_record):
+        for layer_idx, weight_idx, bit_idx in bit_flip_record:
             param = param_list[layer_idx]
             param_flat = param.view(-1)
 
@@ -136,67 +129,70 @@ class BitFlipStrategy:
                 param_flat.device
             )
 
-    def run(self, iteration: int, model: torch.nn.Module):
-        worker_outputs, model_hashes = self.do_bit_flips_on_workers(
+    def run(
+        self,
+        iteration: int,
+        model: torch.nn.Module,
+        state_dict_update_compressed: bytes,
+        model_hash_before: bytes,
+    ):
+        worker_outputs, bit_flip_model_hashes = self.do_bit_flips_on_workers(
             seed=0x1234 + iteration,
         )
         bit_flip_worker_records, bit_flip_predictions = self.outputs_to_tensors(
             worker_outputs
         )
+        assert (bit_flip_worker_records[0] == bit_flip_worker_records).all()
 
         successes = list(
             self.filter_successes(
                 bit_flip_worker_records,
                 bit_flip_predictions,
+                bit_flip_model_hashes,
                 self.n_tries,
-                model_hashes,
             )
         )
-        successful_predictions: List[torch.Tensor] = [v[0] for v in successes]
-        successful_records: List[torch.Tensor] = [v[1] for v in successes]
-        successful_model_hashes: List[bytes] = [v[2] for v in successes]
 
-        is_success, accuracy, candidate_id = self.verify_accuracy_unchanged(
-            successful_records, successful_model_hashes
+        is_success, accuracy, bit_flip_try_id = self.verify_accuracy_unchanged(
+            successes
+        )
+
+        logfile = self.logger.log_bit_flip_step(
+            iteration,
+            worker_outputs,
+            is_success,
+            bit_flip_try_id,
+            accuracy,
+            self.initial_accuracy,
+            self.accuracy_boundary,
+            self.initial_accuracy * self.accuracy_boundary,
+            model_hash_before,
         )
 
         if not is_success:
-            return False
-        assert candidate_id is not None
+            return False, None
+        assert bit_flip_try_id is not None
 
-        bit_flipped_model = self.reapply_bit_flips(
-            model,
-            successful_records,
-            successful_model_hashes,
-            candidate_id,
+        first_bit_flip_output = next(iter(worker_outputs.values()))
+
+        assert (
+            self.reapply_bit_flips(
+                model,
+                first_bit_flip_output.bit_flip_records[bit_flip_try_id],
+                expected_model_hash=first_bit_flip_output.model_hashes[bit_flip_try_id],
+            )
+            is not None
         )
 
-        self.logger.save_intermediate_model(
-            iteration,
-            "success-bitflip-models",
-            model=bit_flipped_model,
-            x_fool=self.x_fool,
-            info={
-                "candidate_id": candidate_id,
-                "predictions": successful_predictions,
-                "initial_accuracy": self.initial_accuracy,
-                "accuracy_boundary": self.accuracy_boundary,
-                "target_accuracy": self.initial_accuracy * self.accuracy_boundary,
-                "accuracy": accuracy,
-                "successful_bit_records": successful_records,
-                "successful_model_hashes": successful_model_hashes,
-            },
-        )
-        self.logger.write(f"SUCCESS AFTER BIT FLIP (acc: {accuracy})")
-        self.logger.create_success_file("bit_flip")
+        self.logger.save_success(state_dict_update_compressed, logfile, "bit_flip")
 
         return True
 
-    def verify_accuracy_unchanged(
-        self,
-        bit_flip_records: List[torch.Tensor],
-        model_hashes: List[bytes],
-    ):
+    def verify_accuracy_unchanged(self, successes: List[Any]):
+        bit_flip_try_ids: List[torch.Tensor] = [v[0] for v in successes]
+        bit_flip_records: List[torch.Tensor] = [v[2] for v in successes]
+        model_hashes: List[bytes] = [v[3] for v in successes]
+
         assert len(bit_flip_records) == len(model_hashes)
         if len(bit_flip_records) == 0:
             return False, None, None
@@ -206,6 +202,7 @@ class BitFlipStrategy:
             {
                 "run_id": self.run_id,
                 "redo_bit_flips": True,
+                "bit_flip_try_ids": bit_flip_try_ids,
                 "bit_flip_records": bit_flip_records,
                 "model_hashes": model_hashes,
                 "use_full_model": self.use_full_model,
@@ -216,10 +213,14 @@ class BitFlipStrategy:
         if not redo_output["success"]:
             return False, None, None
 
-        return True, redo_output["accuracy"], redo_output["candidate_id"]
+        return True, redo_output["accuracy"], redo_output["bit_flip_try_id"]
 
     def filter_successes(
-        self, bit_flip_worker_records, bit_flip_predictions, n_tries, model_hashes
+        self,
+        bit_flip_worker_records,
+        bit_flip_predictions,
+        bit_flip_model_hashes,
+        n_tries,
     ):
         # (n_worker, n_tries, n_bits_flipped, 3) -> (n_tries, n_bits_flipped, 3)
         bit_flip_records = bit_flip_worker_records[0]
@@ -227,9 +228,9 @@ class BitFlipStrategy:
             bit_flip_worker_records == bit_flip_records
         ), "Workers' data are not identical!"
 
-        for i, model_hash in zip(range(n_tries), model_hashes):
+        for bit_flip_try_id, model_hash in zip(range(n_tries), bit_flip_model_hashes):
             # n_workers, n_tries, n_samples -> n_workers, n_samples
-            bit_flip_prediction = bit_flip_predictions[:, i, :]
+            bit_flip_prediction = bit_flip_predictions[:, bit_flip_try_id, :]
 
             if self.do_one_vs_all:
                 is_success = one_vs_all(bit_flip_prediction, 0)
@@ -238,8 +239,8 @@ class BitFlipStrategy:
 
             if is_success:
                 # (n_tries, n_bits_flipped, 3) -> (n_bits_flipped, 3)
-                bit_flip_record = bit_flip_records[i]
-                yield bit_flip_prediction, bit_flip_record, model_hash
+                bit_flip_record = bit_flip_records[bit_flip_try_id]
+                yield bit_flip_try_id, bit_flip_prediction, bit_flip_record, model_hash
 
     def outputs_to_tensors(self, worker_outputs: Dict[str, BitFlipOutput]):
         n_samples = self.x_fool.shape[0]
@@ -273,14 +274,16 @@ class BitFlipStrategy:
     def reapply_bit_flips(
         self,
         model: torch.nn.Module,
-        successful_records: List[torch.Tensor],
-        successful_model_hashes: List[bytes],
-        candidate_id: int,
+        bit_flip_record: torch.Tensor,
+        *,
+        expected_model_hash: Optional[bytes] = None,
     ):
         self.flip_bits(
             list(get_relevant_parameters(model, self.use_full_model).values()),
-            successful_records[candidate_id],
+            bit_flip_record,
         )
-        assert successful_model_hashes[candidate_id] == hash_tensor(*model.parameters())
+
+        if expected_model_hash:
+            assert expected_model_hash == hash_tensor(*model.parameters())
 
         return model

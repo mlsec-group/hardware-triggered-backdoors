@@ -1,6 +1,27 @@
-import io
-import zlib
+from dataclasses import dataclass
+from typing import List
+
 import torch
+
+
+@dataclass
+class BitFlipOutput:
+    # (n_tries, n_samples, n_classes)
+    predictions: torch.Tensor
+    # (n_tries, n_bits_flipped, 3)
+    bit_flip_records: torch.Tensor
+    # (n_tries, )
+    model_hashes: List[bytes]
+
+
+@dataclass
+class PermutationOutput:
+    # (n_permutations, n_samples, n_classes)
+    predictions: torch.Tensor
+    # (n_permutations, n_permutable_layers_i, n_output_features_j)
+    permutations: List[List[torch.Tensor]]
+    # (n_permutations)
+    model_hashes: List[bytes]
 
 
 def all_different(X: torch.Tensor) -> bool:

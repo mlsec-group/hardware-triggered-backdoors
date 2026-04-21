@@ -1,6 +1,8 @@
 from argparse import Namespace
+import dataclasses
 import datetime
 from itertools import combinations
+import json
 import os
 import time
 from typing import List, Optional, Union
@@ -55,9 +57,6 @@ class BackdoorServer(BackdoorCLI, ServerStrategy):
         self.do_one_vs_all = args.do_one_vs_all.lower() == "true"
         self.use_full_model = args.use_full_model.lower() == "true"
         self.use_deterministic = args.use_deterministic.lower() == "true"
-        self.skip_is_prediction_close_check = (
-            args.skip_is_prediction_close_check.lower() == "true"
-        )
 
         #
         # Dataset
@@ -75,6 +74,7 @@ class BackdoorServer(BackdoorCLI, ServerStrategy):
         torch.serialization.add_safe_globals([ResNet18])
 
         self.campaign_start: Optional[datetime.datetime] = None
+        self.job_outputs: List[JobOutput] = []
 
     def get_number_of_steps_per_job(self) -> int:
         return self.n_iterations
@@ -135,7 +135,6 @@ class BackdoorServer(BackdoorCLI, ServerStrategy):
                             do_one_vs_all=self.do_one_vs_all,
                             use_full_model=self.use_full_model,
                             use_deterministic=self.use_deterministic,
-                            skip_is_prediction_close_check=self.skip_is_prediction_close_check,
                         ),
                         callback=self.job_finished,
                     )
@@ -173,32 +172,12 @@ class BackdoorServer(BackdoorCLI, ServerStrategy):
                             n_bits_flipped=self.n_bits_flipped,
                             use_full_model=self.use_full_model,
                             use_deterministic=self.use_deterministic,
-                            skip_is_prediction_close_check=self.skip_is_prediction_close_check,
                         ),
                         callback=self.job_finished,
                     )
 
-    def job_finished(self, output: JobOutput):
-        with open(os.path.join(output.logger_base_dir, "job-log.txt"), "w") as f:
-            print("Name: ", output.name, file=f)
-            print("Message: ", output.message, file=f)
-            print("Start: ", output.job_start, file=f)
-            print("End: ", output.job_end, file=f)
-
-            print("Iterations:", file=f)
-            for iteration_record in output.iteration_times:
-                print(
-                    " - ",
-                    (iteration_record.end - iteration_record.start).total_seconds(),
-                    file=f,
-                )
-                for sub_measurement in iteration_record.sub_measurements:
-                    print(
-                        "   - ",
-                        (sub_measurement[2] - sub_measurement[1]),
-                        sub_measurement[0],
-                        file=f,
-                    )
+    def job_finished(self, output):
+        self.job_outputs.append(output)
 
     def final(self) -> None:
         self.campaign_end = datetime.datetime.now()
@@ -206,3 +185,10 @@ class BackdoorServer(BackdoorCLI, ServerStrategy):
         with open(os.path.join(self.run_path, "campaign-log.txt"), "w") as f:
             print("Start: ", self.campaign_start, file=f)
             print("End: ", self.campaign_end, file=f)
+
+        with open(os.path.join(self.run_path, "job-outputs.json"), "w") as f:
+            json.dump(
+                {"jobs": [dataclasses.asdict(job) for job in self.job_outputs]},
+                f,
+                indent=2,
+            )

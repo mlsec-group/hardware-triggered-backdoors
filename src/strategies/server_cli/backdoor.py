@@ -62,9 +62,3 @@ class BackdoorCLI(StrategyCLI):
             type=str,
             choices=["true", "false"],
         )
-        parser.add_argument(
-            "--skip_is_prediction_close_check",
-            default="false",
-            type=str,
-            choices=["true", "false"],
-        )

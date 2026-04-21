@@ -31,7 +31,7 @@ def get_relevant_parameters(
 def get_trainer_worker(workers: Dict[str, Worker]):
     for worker_name in workers:
         if worker_name.endswith(":gpu"):
-            return workers[worker_name]
+            return worker_name, workers[worker_name]
 
     assert False
 

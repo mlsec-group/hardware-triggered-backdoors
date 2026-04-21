@@ -13,21 +13,12 @@ from torchvision.models.vision_transformer import MLPBlock, VisionTransformer
 
 from common.util import hash_tensor
 from strategies.server.backdoor.after_grads_transformations.util import (
+    PermutationOutput,
     all_different,
     one_vs_all,
 )
 from strategies.server.backdoor.logging import GradientLogger
 from strategies.server.backdoor.util import EMPTY_HASH
-
-
-@dataclass
-class PermutationOutput:
-    # (n_permutations, n_samples, n_classes)
-    predictions: torch.Tensor
-    # (n_permutations, n_permutable_layers_i, n_output_features_j)
-    permutations: List[List[torch.Tensor]]
-    # (n_permutations)
-    model_hashes: List[bytes]
 
 
 @torch.inference_mode()
@@ -66,8 +57,6 @@ class PermutationStrategy:
         executor: ThreadPoolExecutor,
         logger: GradientLogger,
         *,
-        initial_accuracy: float,
-        accuracy_boundary: float,
         do_one_vs_all: bool,
     ):
         self.run_id = run_id
@@ -77,9 +66,6 @@ class PermutationStrategy:
 
         self.executor = executor
         self.logger = logger
-
-        self.initial_accuracy = initial_accuracy
-        self.accuracy_boundary = accuracy_boundary
 
         self.do_one_vs_all = do_one_vs_all
 
@@ -144,36 +130,69 @@ class PermutationStrategy:
         self,
         iteration: int,
         model: torch.nn.Module,
-        output_trainer,
+        state_dict_update_compressed: bytes,
+        model_hash_before: bytes,
     ):
         seed = 0x1234 + iteration
-        worker_outputs = self.do_permutations_on_workers(
-            seed=seed,
+        worker_outputs = self.do_permutations_on_workers(seed=seed)
+
+        permutation_try_id = self.find_conflict(worker_outputs)
+
+        # TODO:
+        # WARNING:
+        # TODO:
+        permutation_try_id = 3
+
+        is_success = permutation_try_id is not None
+
+        if is_success:
+            # Verify that the model hashes are the same (this should be redundant
+            # because we already compare the hashes between the clients early, but just
+            # to be sure we do it here again)
+            permuted_model_hashes: List[bytes] = []
+            permutations: Dict[bytes, torch.Tensor] = {}
+            for worker_output in worker_outputs.values():
+                permuted_model_hashes.append(
+                    worker_output.model_hashes[permutation_try_id]
+                )
+                permutation = worker_output.permutations[permutation_try_id]
+                permutations[hash_tensor(*permutation)] = permutation
+            assert len(set(permuted_model_hashes)) == 1
+            assert len(permutations) == 1
+
+            model_hash, permuted_model_hash = self.verify_model_hash(
+                model, permutation, permuted_model_hashes[0]
+            )
+
+        logfile = self.logger.log_permute_step(
+            iteration, worker_outputs, is_success, permutation_try_id, model_hash_before
         )
 
-        if self.is_success_after_client_transformations(
-            model,
-            output_trainer,
-            iteration,
-            worker_outputs,
-        ):
-            self.logger.write("SUCCESS AFTER PERMUTE")
-            self.logger.create_success_file("permute")
+        if is_success:
+            self.logger.save_success(
+                state_dict_update_compressed, logfile, "permutation"
+            )
 
-            return True
+        return is_success
 
-        return False
+    def verify_model_hash(self, model, permutation, expected_hash):
+        model_hash = hash_tensor(*model.parameters())
+        permute_model(model, permutation)
+        permuted_model_hash = hash_tensor(*model.parameters())
+        assert expected_hash == permuted_model_hash
 
-    def foo(self, worker_outputs: Dict[str, PermutationOutput]):
+        return model_hash, permuted_model_hash
+
+    def find_conflict(self, worker_outputs: Dict[str, PermutationOutput]):
         # Stack predictions into a single tensor:
         # shape [n_workers, n_tries, n_samples, n_classes]
         stacked = torch.stack(
             [worker_outputs[w].predictions for w in self.test_workers]
         )
 
-        for permutation_id in range(self.n_permutations):
+        for permutation_try_id in range(self.n_permutations):
             # [n_workers, n_samples, n_classes]
-            prediction = stacked[:, permutation_id, :, :]
+            prediction = stacked[:, permutation_try_id, :, :]
             if torch.isnan(prediction).any():
                 continue
 
@@ -182,71 +201,10 @@ class PermutationStrategy:
 
             if self.do_one_vs_all:
                 if one_vs_all(prediction_matrix, 0):
-                    return permutation_id, prediction_matrix
+                    return permutation_try_id
             else:
                 if all_different(prediction_matrix):
-                    return permutation_id, prediction_matrix
+                    return permutation_try_id
 
         # Loop ran without breaking = no conflict found
         return None
-
-    def is_success_after_client_transformations(
-        self,
-        model: torch.nn.Module,
-        output_trainer,
-        iteration: int,
-        worker_outputs: Dict[str, PermutationOutput],
-    ):
-        if (result := self.foo(worker_outputs)) is None:
-            return False
-
-        permutation_id, prediction_matrix = result
-
-        # Verify that the model hashes are the same (this should be redundant
-        # because we already compare the hashes between the clients early, but just
-        # to be sure we do it here again)
-        permuted_model_hashes: List[bytes] = []
-        permutations: List[List[torch.Tensor]] = []
-        for worker_output in worker_outputs.values():
-            permuted_model_hashes.append(worker_output.model_hashes[permutation_id])
-            permutations.append(worker_output.permutations[permutation_id])
-        assert len(set(permuted_model_hashes)) == 1
-
-        # Note: This is calculated on the non-permutated model. For permutation this
-        # will not be as impactfull, but for bit flips this will later needed
-        # to be reevaluated
-        # Loop breaks early => conflict found => check accuracy
-        accuracy = output_trainer["accuracy"]
-        if accuracy < self.accuracy_boundary * self.initial_accuracy:
-            print(
-                "Removed from consideration: ",
-                accuracy,
-                "<",
-                self.accuracy_boundary,
-                "*",
-                self.initial_accuracy,
-            )
-            return False
-
-        # Reapply permutations
-        permute_model(model, permutations[0])
-        assert permuted_model_hashes[0] == hash_tensor(*model.parameters())
-
-        self.logger.save_intermediate_model(
-            iteration,
-            "success-permute-models",
-            model=model,
-            x_fool=self.x_fool,
-            info={
-                "predictions": [
-                    prediction_matrix[worker_id]
-                    for worker_id in range(len(self.test_workers))
-                ],
-                "initial_accuracy": self.initial_accuracy,
-                "accuracy_boundary": self.accuracy_boundary,
-                "target_accuracy": self.initial_accuracy * self.accuracy_boundary,
-                "accuracy": accuracy,
-            },
-        )
-
-        return True
