@@ -15,4 +15,4 @@ if [[ -z "$BACKEND_NAME" ]]; then
     exit 1
 fi
 
-apptainer run --nv apptainer/gpu.sif python3 src/client_remote.py --hostname ${HOSTNAME} --port 13370 --backend ${BACKEND_NAME}:gpu
+APPTAINERENV_CUDA_VISIBLE_DEVICES= apptainer run --nv apptainer/gpu.sif python3 src/client_remote.py --hostname ${HOSTNAME} --port 13370 --backend ${BACKEND_NAME}
