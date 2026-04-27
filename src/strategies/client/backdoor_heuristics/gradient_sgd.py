@@ -7,7 +7,9 @@ from typing import Dict, List, Optional
 import torch
 import tqdm
 from torchvision.models.vision_transformer import VisionTransformer
+from transformers.models.siglip.modeling_siglip import SiglipModel
 
+from common.siglip_adapter import SigLIPAdapter
 from common.util import hash_tensor
 from strategies.client.backdoor_heuristics.heuristic import Heuristic, HeuristicOutput
 from strategies.client.backdoor_heuristics.util.losses import c_and_w, regularization
@@ -28,6 +30,13 @@ def get_relevant_parameters(
                 k: v
                 for k, v in model.named_parameters()
                 if k == "conv_proj.weight" or k == "conv_proj.bias"
+            }
+        elif isinstance(model, SigLIPAdapter):
+            return {
+                k: v
+                for k, v in model.named_parameters()
+                if k == "siglip_model.vision_model.embeddings.patch_embedding.weight"
+                or k == "siglip_model.vision_model.embeddings.patch_embedding.bias"
             }
         else:
             assert False

@@ -346,3 +346,7 @@ class GradientLogger:
 
         with open(os.path.join(self.log_dir, success_type), "w") as f:
             print(file=f)
+
+    def save_failure(self):
+        with open(os.path.join(self.log_dir, "failure"), "w") as f:
+            print(file=f)

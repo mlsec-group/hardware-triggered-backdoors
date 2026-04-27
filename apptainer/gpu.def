@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: ubuntu:latest
+From: ubuntu:24.04
 
 %environment
     export VIRTUAL_ENV="/app/venv"
@@ -30,7 +30,7 @@ From: ubuntu:latest
     cd /app/
     python3 -m venv venv
 
-    pip3 install numpy pyyaml typing_extensions ninja pillow tqdm matplotlib torch==2.10 torchvision==0.25.0 nvidia-dali-cuda130
+    pip3 install numpy pyyaml typing_extensions ninja pillow tqdm matplotlib torch torchvision nvidia-dali-cuda130 requests transformers sentencepiece protobuf
 
     apt-get remove -y \
         build-essential \

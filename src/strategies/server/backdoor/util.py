@@ -3,11 +3,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, Optional
 
 import torch
-from jobscheduler.worker import Worker
-
-from common.util import hash_tensor
-
 from torchvision.models.vision_transformer import VisionTransformer
+
+from common.siglip_adapter import SigLIPAdapter
+from common.util import hash_tensor
+from jobscheduler.worker import Worker
 
 EMPTY_HASH = hash_tensor()
 
@@ -23,6 +23,13 @@ def get_relevant_parameters(
                 k: v
                 for k, v in model.named_parameters()
                 if k == "conv_proj.weight" or k == "conv_proj.bias"
+            }
+        elif isinstance(model, SigLIPAdapter):
+            return {
+                k: v
+                for k, v in model.named_parameters()
+                if k == "siglip_model.vision_model.embeddings.patch_embedding.weight"
+                or k == "siglip_model.vision_model.embeddings.patch_embedding.bias"
             }
         else:
             assert False

@@ -9,13 +9,16 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import torch
+from torchvision.models.vision_transformer import VisionTransformer
+from transformers import AutoModel, AutoProcessor
+from transformers.models.siglip.modeling_siglip import SiglipModel
+
+from common.siglip_adapter import SigLIPAdapter
 from common.util import hash_tensor
 from jobscheduler.client import ClientConfig
 from jobscheduler.job import Job
 from jobscheduler.progresstracker import ProgressTracker
 from jobscheduler.worker import Worker
-from torchvision.models.vision_transformer import VisionTransformer
-
 from strategies.server.backdoor.after_grads_transformations.bit_flips import (
     BitFlipStrategy,
 )
@@ -331,11 +334,16 @@ class BackdoorJob(Job):
             self.use_full_model,
             self.use_deterministic,
         ):
-            model = torch.load(
-                self.model_path,
-                map_location=torch.device("cpu"),
-                weights_only=True,
-            )
+            if self.model_path.startswith("hf://"):
+                model_url = self.model_path[len("hf://") :]
+                assert model_url == "google/siglip-so400m-patch14-384"
+                model = SigLIPAdapter(model_url, cache_dir=".cache")
+            else:
+                model = torch.load(
+                    self.model_path,
+                    map_location=torch.device("cpu"),
+                    weights_only=True,
+                )
             initial_model_hash = hash_tensor(*model.parameters())
             initial_model_hash_hex = initial_model_hash.hex()
 
@@ -453,6 +461,10 @@ class BackdoorJob(Job):
                             model.load_state_dict(state_dict_update)
                         elif isinstance(model, VisionTransformer):
                             model.conv_proj.load_state_dict(state_dict_update)
+                        elif isinstance(model, SigLIPAdapter):
+                            model.siglip_model.vision_model.embeddings.patch_embedding.load_state_dict(
+                                state_dict_update
+                            )
                         else:
                             assert False
 
@@ -537,4 +549,5 @@ class BackdoorJob(Job):
                                     iteration=iteration,
                                 )
 
+                logger.save_failure()
                 return JobOutput(x_index=self.x_index, success=False)

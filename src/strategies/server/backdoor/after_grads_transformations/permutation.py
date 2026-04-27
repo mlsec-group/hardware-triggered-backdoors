@@ -1,17 +1,17 @@
 import copy
-from dataclasses import dataclass
 import functools
 import io
 import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from typing import Any, Dict, List
 
 import torch
 import torch.nn as nn
-from jobscheduler.worker import Worker
 from torchvision.models.vision_transformer import MLPBlock, VisionTransformer
 
 from common.util import hash_tensor
+from jobscheduler.worker import Worker
 from strategies.server.backdoor.after_grads_transformations.util import (
     PermutationOutput,
     all_different,
@@ -137,12 +137,6 @@ class PermutationStrategy:
         worker_outputs = self.do_permutations_on_workers(seed=seed)
 
         permutation_try_id = self.find_conflict(worker_outputs)
-
-        # TODO:
-        # WARNING:
-        # TODO:
-        permutation_try_id = 3
-
         is_success = permutation_try_id is not None
 
         if is_success:

@@ -145,6 +145,7 @@ def start(
         "--privileged",
         *port_flag,
         f"-v/run/user/{uid}/docker.sock:/var/run/docker.sock",
+        f"-v{project_dir}/.cache:/app/.cache",
         f"-v{project_dir}/src/__init__.py:/app/src/__init__.py:ro",
         f"-v{project_dir}/jobscheduler/src/jobscheduler:/app/src/jobscheduler:ro",
         f"-v{project_dir}/src/models.py:/app/src/models.py:ro",

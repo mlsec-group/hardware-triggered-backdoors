@@ -1,22 +1,25 @@
+import copy
 import hashlib
 import io
 import logging
 import os
 import random
+import time
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
 import tqdm
 from torch.autograd.grad_mode import inference_mode
-from torch.utils.data import DataLoader
 from torchvision.models.vision_transformer import MLPBlock, VisionTransformer
+from transformers import AutoModel, AutoProcessor
+from transformers.models.siglip.modeling_siglip import SiglipModel, SiglipOutput
 
+from common.imagenet_labels import IMAGENET_LABELS
+from common.siglip_adapter import SigLIPAdapter
 from common.util import hash_tensor
-from datasets.common import EnumerateDataset
 from datasets.imagenet import ImageNetAccuracyEvaluator
 from datasets.loader import get_dataset_loader
-from models import ResNet18
 from strategies.client.backdoor_heuristics.gradient_sgd import (
     GradientSGDHeuristic,
     get_relevant_parameters,
@@ -183,7 +186,14 @@ class BackdoorClient(ClientStrategy):
         else:
             self.model_device = torch.device("cpu")
             # assert False
-        torch.set_default_device(self.model_device)
+        # torch.set_default_device(self.model_device)
+
+        self.use_hugging_face_model = self.model_path.startswith("hf://")
+
+        if self.use_hugging_face_model:
+            self.model_url = self.model_path[len("hf://") :]
+        else:
+            self.model_url = None
 
         self.run_state: Dict[str, RunState] = {}
         self.cached_models: Dict[str, torch.nn.Module] = {}
@@ -227,9 +237,13 @@ class BackdoorClient(ClientStrategy):
         x_fool = x_fool.to(self.model_device)
         y_fool = y_fool.to(self.model_device)
 
-        model = torch.load(
-            self.model_path, map_location=self.model_device, weights_only=True
-        )
+        if self.use_hugging_face_model:
+            assert self.model_url == "google/siglip-so400m-patch14-384"
+            model = SigLIPAdapter(self.model_url, device=self.model_device)
+        else:
+            model = torch.load(
+                self.model_path, map_location=self.model_device, weights_only=True
+            )
         model.eval()
 
         generator = torch.Generator(device=self.model_device).manual_seed(seed)
@@ -272,6 +286,11 @@ class BackdoorClient(ClientStrategy):
             torch.save(model.state_dict(), buffer)
         elif isinstance(model, VisionTransformer):
             torch.save(model.conv_proj.state_dict(), buffer)
+        elif isinstance(model, SigLIPAdapter):
+            torch.save(
+                model.siglip_model.vision_model.embeddings.patch_embedding.state_dict(),
+                buffer,
+            )
         else:
             assert False
         buffer.seek(0)
@@ -573,6 +592,10 @@ class BackdoorClient(ClientStrategy):
                 model.load_state_dict(state_dict_update)
             elif isinstance(model, VisionTransformer):
                 model.conv_proj.load_state_dict(state_dict_update)
+            elif isinstance(model, SigLIPAdapter):
+                model.siglip_model.vision_model.embeddings.patch_embedding.load_state_dict(
+                    state_dict_update
+                )
             else:
                 assert False
 
@@ -626,7 +649,7 @@ class BackdoorClient(ClientStrategy):
         return hash_tensor(), {"model_compressed": compress(model_bytes)}
 
     @inference_mode()
-    def get_fast_accuracy(self, model):
+    def get_fast_accuracy(self, model, *, percentage=0.125):
         n_steps_for_imagenet = 195
         evaluator = ImageNetAccuracyEvaluator(
             os.path.join(self.config_dataset_dir, self.dataset, "val_set")
@@ -644,7 +667,7 @@ class BackdoorClient(ClientStrategy):
         while True:
             try:
                 i, batch = next(it)
-                if i == n_steps_for_imagenet:
+                if i >= percentage * n_steps_for_imagenet:
                     break
             except StopIteration:
                 break
@@ -683,11 +706,14 @@ class BackdoorClient(ClientStrategy):
         return hash_tensor(), {}
 
     def set_model(self, run_id: str, model_path: str, model_hash: bytes):
-        model = torch.load(
-            model_path,
-            map_location=self.model_device,
-            weights_only=True,
-        )
+        if self.use_hugging_face_model:
+            model = SigLIPAdapter(self.model_url, device=self.model_device)
+        else:
+            model = torch.load(
+                model_path,
+                map_location=self.model_device,
+                weights_only=True,
+            )
         self.cached_models[run_id] = model
         assert model_hash == hash_tensor(*model.parameters())
         return hash_tensor(), {}
@@ -733,6 +759,7 @@ class BackdoorClient(ClientStrategy):
             == 1
         )
 
+        # Trainer only
         if reset:
             self.logger.info("Step: Reset")
             return self.reset(run_id, **kwargs)
