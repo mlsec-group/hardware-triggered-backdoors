@@ -652,7 +652,8 @@ class BackdoorClient(ClientStrategy):
     def get_fast_accuracy(self, model, *, percentage=0.125):
         n_steps_for_imagenet = 195
         evaluator = ImageNetAccuracyEvaluator(
-            os.path.join(self.config_dataset_dir, self.dataset, "val_set")
+            os.path.join(self.config_dataset_dir, self.dataset, "val_set"),
+            random_shuffle=True,
         )
         t = tqdm.tqdm(
             enumerate(evaluator.get_iterator()),

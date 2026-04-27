@@ -366,6 +366,11 @@ class BackdoorJob(Job):
                 == "9d05cb7cc110598f7475560b8d7d4ccf8a8efa57ebd5ef20c0da09aa8850ea09"
             ):
                 initial_accuracy = 0.6976
+            elif (
+                initial_model_hash_hex
+                == "baf42be325accd45324777cb22258a9c89a2a5b5a2af0a994ace5f163f2bea2a"
+            ):
+                initial_accuracy = 0.7922275641025641
             else:
                 initial_accuracy = self.retrieve_initial_accuracy(
                     run_id, trainer_worker
