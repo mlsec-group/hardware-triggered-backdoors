@@ -170,7 +170,8 @@ class BitFlipStrategy:
         )
 
         if not is_success:
-            return False, None
+            return False
+
         assert bit_flip_try_id is not None
 
         first_bit_flip_output = next(iter(worker_outputs.values()))
