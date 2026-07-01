@@ -9,6 +9,7 @@ import sys
 
 from strategies.server_cli.backdoor import BackdoorCLI
 from strategies.server_cli.backdoor_defense import BackdoorDefenseCLI
+from strategies.server_cli.chimera import ChimeraCLI
 from strategies.server_cli.example import ExampleCLI
 
 
@@ -154,6 +155,7 @@ def start(
         f"-v{project_dir}/src/scheduler:/app/src/scheduler:ro",
         f"-v{project_dir}/src/datasets:/app/src/datasets:ro",
         f"-v{project_dir}/src/strategies/__init__.py:/app/src/strategies/__init__.py:ro",
+        f"-v{project_dir}/src/strategies/chimera_config.py:/app/src/strategies/chimera_config.py:ro",
         f"-v{project_dir}/src/strategies/server_strategy.py:/app/src/strategies/server_strategy.py:ro",
         f"-v{project_dir}/src/strategies/server:/app/src/strategies/server:ro",
         f"-v{project_dir}/src/strategies/server_cli:/app/src/strategies/server_cli:ro",
@@ -182,6 +184,7 @@ def main():
         for c in [
             BackdoorCLI,
             BackdoorDefenseCLI,
+            ChimeraCLI,
             ExampleCLI,
         ]
     }
