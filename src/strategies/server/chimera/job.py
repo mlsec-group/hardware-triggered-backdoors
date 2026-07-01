@@ -100,7 +100,7 @@ class ChimeraJob(Job):
             f.write(f"[{timestamp}]>  {message}\n")
 
     def _sample_dir(self):
-        return os.path.join(self.run_path, f"sample-{self.sample_index}")
+        return os.path.join(self.run_path, "samples", f"sample-{self.sample_index}")
 
     def _tensor_to_json(self, tensor: torch.Tensor):
         return tensor.detach().cpu().tolist()
@@ -222,9 +222,7 @@ class ChimeraJob(Job):
                 f"[sample:{self.sample_index} dataset_index:{self.dataset_index} "
                 f"ROUND:{round_idx}] "
                 f"probing batch_size={int(candidates.shape[0])} "
-                f"best_abs_margin={gen_output.get('best_abs_margin')} "
-                f"candidate_abs_margins="
-                f"{None if candidate_abs_margins is None else self._tensor_to_json(candidate_abs_margins)}"
+                f"best_abs_margin={gen_output.get('best_abs_margin')}"
             )
 
             _, blis_output = blis.worker_step(
@@ -284,7 +282,8 @@ class ChimeraJob(Job):
             final_blis_output = blis_output
             final_openblas_output = openblas_output
             self._collect_search_trace(update_status)
-            self.probe_trace[-1]["update_status"] = self._jsonable_status(update_status)
+            if "chimera_index" in update_status:
+                self.probe_trace[-1]["chimera_index"] = update_status["chimera_index"]
 
             if update_status.get("done"):
                 break
@@ -301,9 +300,8 @@ class ChimeraJob(Job):
         for item in self.probe_trace:
             disagreement = item.get("disagreement") or []
             if any(disagreement):
-                update_status = item.get("update_status", {})
                 chimera_batch_index = int(
-                    update_status.get("chimera_index", disagreement.index(True))
+                    item.get("chimera_index", disagreement.index(True))
                 )
                 chimera_round = int(item["round"])
                 candidates_to_chimera = candidates_before_round + chimera_batch_index + 1

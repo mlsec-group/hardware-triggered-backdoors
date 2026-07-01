@@ -166,18 +166,18 @@ Each run directory contains:
 ```text
 submission.log        human-readable run log, similar to the original runner
 summary.json          processed/attempted/chimera/error totals plus per-job status
-sample-*/result.json  final status for one CIFAR sample
-sample-*/probe-log.json
-sample-*/search-log.json
-sample-*/original.pt
-sample-*/candidate.pt
-sample-*/blis-output.pt
-sample-*/openblas-output.pt
-sample-*/original.png  success-only preview image
-sample-*/chimera.png   success-only preview image
+samples/sample-*/result.json  final status for one CIFAR sample
+samples/sample-*/probe-log.json
+samples/sample-*/search-log.json
+samples/sample-*/original.pt
+samples/sample-*/candidate.pt
+samples/sample-*/blis-output.pt
+samples/sample-*/openblas-output.pt
+samples/sample-*/original.png  success-only preview image
+samples/sample-*/chimera.png   success-only preview image
 ```
 
-`sample-*` directories use the run-local order (`sample-0`, `sample-1`, ...). The original shuffled dataset id is stored as `dataset_index` in `result.json` and `summary.json`.
+`samples/sample-*` directories use the run-local order (`sample-0`, `sample-1`, ...). The original shuffled dataset id is stored as `dataset_index` in `result.json` and `summary.json`.
 
 ## Common knobs
 
@@ -190,9 +190,11 @@ sample-*/chimera.png   success-only preview image
 
 When `--dataset_path` points at a CIFAR-10 directory, Chimera loads all five training batches, shuffles them with the run seed, and then takes `--n_samples` starting at `--sample_index` as an offset into that shuffled order. Passing a single batch file still works for compatibility.
 
-The Chimera defaults live in one place: `ChimeraSearchConfig` in `src/strategies/chimera_config.py`. Change `walk_rounds`, `probe_batch_size`, `sweep_coords_per_round`, `gd_steps`, or `save_preview_images` there and rerun the pipeline.
+The Chimera defaults live in one place: `ChimeraSearchConfig` in `src/strategies/chimera_config.py`. Change `target_abs_margin`, `walk_rounds`, `probe_batch_size`, `sweep_coords_per_round`, `gd_steps`, `oracle_bridge_candidates`, or `save_preview_images` there and rerun the pipeline. `target_abs_margin` is the single boundary-closeness threshold for deciding when extra local refinement is no longer worth it; it is not a hard oracle-probing cutoff.
 
 With the current defaults, one job can probe up to `walk_rounds * probe_batch_size` candidates. Most samples stop earlier once a chimera is found.
+
+`oracle_bridge_candidates` adds targeted candidates after a no-hit oracle round: if BLIS/OpenBLAS still agree, the generator looks for mutual top/runner-up pairs such as `9 -> 0` and `0 -> 9`, then queues quantized interpolations between those endpoints. Bridge candidates are margin-scored after interpolation and refined with the same `target_abs_margin` rule as other candidates.
 
 `chimera_server.sh` runs 100 CIFAR samples by default. For a short smoke test, override the sample count without editing the script:
 

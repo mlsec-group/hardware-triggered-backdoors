@@ -14,6 +14,12 @@ class MarginState:
     competitor: int
 
 
+@dataclass(frozen=True)
+class CandidateProposal:
+    tensor: torch.Tensor
+    source: str
+
+
 def quantize_tensor(tensor: torch.Tensor) -> torch.Tensor:
     return torch.floor(tensor.clamp(0, 1) * 255.0 + 0.5) / 255.0
 
@@ -49,7 +55,12 @@ class ChimeraSearch:
         self.device = torch.device(device)
         self.label = int(label)
         self.config = config
-        self.rng = np.random.default_rng(int(seed) & 0xFFFFFFFF)
+        seed = int(seed) & 0xFFFFFFFF
+        self.rng = np.random.default_rng(seed)
+        try:
+            self.torch_rng = torch.Generator(device=self.device).manual_seed(seed)
+        except RuntimeError:
+            self.torch_rng = torch.Generator().manual_seed(seed)
         self.trace_events = []
 
         self.base_tensor = self.prepare_tensor(image)
@@ -89,6 +100,7 @@ class ChimeraSearch:
         self.result_index: Optional[int] = None
         self.last_candidates: Optional[torch.Tensor] = None
         self.last_states: list[MarginState] = []
+        self.oracle_bridge_queue: list[CandidateProposal] = []
 
     def jsonable(self, value):
         if isinstance(value, torch.Tensor):
@@ -272,6 +284,7 @@ class ChimeraSearch:
                         *center.shape[1:],
                         device=self.device,
                         dtype=torch.float32,
+                        generator=self.torch_rng,
                     )
                     - 0.5
                 ) * (2.0 * current_radius)
@@ -483,7 +496,21 @@ class ChimeraSearch:
         runner_up, _ = masked.max(dim=1)
         return (pred_values - runner_up).abs()
 
-    def _seed_from_oracle_logits(
+    def _runner_up_edges(
+        self,
+        logits: torch.Tensor,
+        predictions: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        logits = logits.detach().cpu().to(torch.float32)
+        predictions = predictions.detach().cpu().to(torch.long)
+        rows = torch.arange(logits.size(0), dtype=torch.long)
+        pred_values = logits[rows, predictions]
+        masked = logits.clone()
+        masked[rows, predictions] = -float("inf")
+        runner_values, runner_idx = masked.max(dim=1)
+        return runner_idx.to(torch.long), (pred_values - runner_values).abs()
+
+    def _update_from_oracle_logits(
         self,
         *,
         blis_predictions: torch.Tensor,
@@ -491,26 +518,158 @@ class ChimeraSearch:
         blis_logits: torch.Tensor,
         openblas_logits: torch.Tensor,
     ) -> None:
-        if not self.config.oracle_guided_seed or self.last_candidates is None:
+        if self.last_candidates is None:
             return
 
-        blis_gap = self._prediction_gaps(blis_logits, blis_predictions)
-        openblas_gap = self._prediction_gaps(openblas_logits, openblas_predictions)
-        oracle_gap = torch.minimum(blis_gap, openblas_gap)
-        idx = int(torch.argmin(oracle_gap).item())
-        if idx >= int(self.last_candidates.size(0)):
-            return
+        if self.config.oracle_guided_seed:
+            blis_gap = self._prediction_gaps(blis_logits, blis_predictions)
+            openblas_gap = self._prediction_gaps(openblas_logits, openblas_predictions)
+            oracle_gap = torch.minimum(blis_gap, openblas_gap)
+            idx = int(torch.argmin(oracle_gap).item())
+            if idx < int(self.last_candidates.size(0)):
+                self.current_tensor = self.last_candidates[idx : idx + 1].to(self.device)
+                self.trace(
+                    "oracle_guided_seed",
+                    round=self.round_idx,
+                    candidate=idx,
+                    oracle_gap=float(oracle_gap[idx].item()),
+                    blis_gap=float(blis_gap[idx].item()),
+                    openblas_gap=float(openblas_gap[idx].item()),
+                    prediction=int(blis_predictions[idx].item()),
+                )
 
-        self.current_tensor = self.last_candidates[idx : idx + 1].to(self.device)
-        self.trace(
-            "oracle_guided_seed",
-            round=self.round_idx,
-            candidate=idx,
-            oracle_gap=float(oracle_gap[idx].item()),
-            blis_gap=float(blis_gap[idx].item()),
-            openblas_gap=float(openblas_gap[idx].item()),
-            prediction=int(blis_predictions[idx].item()),
+        self._build_oracle_bridge_queue(
+            blis_predictions=blis_predictions,
+            openblas_predictions=openblas_predictions,
+            blis_logits=blis_logits,
+            openblas_logits=openblas_logits,
         )
+
+    def _build_oracle_bridge_queue(
+        self,
+        *,
+        blis_predictions: torch.Tensor,
+        openblas_predictions: torch.Tensor,
+        blis_logits: torch.Tensor,
+        openblas_logits: torch.Tensor,
+    ) -> None:
+        self.oracle_bridge_queue = []
+        if self.last_candidates is None:
+            return
+
+        budget = max(0, int(self.config.oracle_bridge_candidates))
+        if budget == 0:
+            return
+
+        blis_predictions = blis_predictions.detach().cpu().to(torch.long)
+        openblas_predictions = openblas_predictions.detach().cpu().to(torch.long)
+        agreed = blis_predictions == openblas_predictions
+        if not bool(torch.any(agreed).item()):
+            return
+
+        blis_runner, blis_gap = self._runner_up_edges(blis_logits, blis_predictions)
+        openblas_runner, openblas_gap = self._runner_up_edges(
+            openblas_logits, openblas_predictions
+        )
+        use_blis = blis_gap <= openblas_gap
+
+        directed = {}
+        for idx in torch.nonzero(agreed, as_tuple=False).flatten().tolist():
+            idx = int(idx)
+            top = int(blis_predictions[idx].item())
+            blis_top_runner = int(blis_runner[idx].item())
+            openblas_top_runner = int(openblas_runner[idx].item())
+            if bool(use_blis[idx].item()):
+                runner = blis_top_runner
+                gap = float(blis_gap[idx].item())
+                source = "blis"
+            else:
+                runner = openblas_top_runner
+                gap = float(openblas_gap[idx].item())
+                source = "openblas"
+            if runner == top:
+                continue
+            directed.setdefault((top, runner), []).append(
+                {"idx": idx, "gap": gap, "source": source}
+            )
+
+        for candidates in directed.values():
+            candidates.sort(key=lambda item: (item["gap"], item["idx"]))
+
+        bridge_pairs = []
+        seen_keys = set()
+        for (left_cls, right_cls), left_candidates in directed.items():
+            if (right_cls, left_cls) in seen_keys:
+                continue
+            right_candidates = directed.get((right_cls, left_cls))
+            if not right_candidates:
+                continue
+            seen_keys.add((left_cls, right_cls))
+            max_rank = min(3, len(left_candidates), len(right_candidates))
+            for rank in range(max_rank):
+                left_item = left_candidates[rank]
+                right_item = right_candidates[rank]
+                bridge_pairs.append(
+                    (
+                        left_item["gap"] + right_item["gap"],
+                        rank,
+                        left_cls,
+                        right_cls,
+                        left_item,
+                        right_item,
+                    )
+                )
+
+        bridge_pairs.sort()
+        if not bridge_pairs:
+            return
+
+        alphas = np.linspace(0.0, 1.0, budget + 2, dtype=np.float32)[1:-1]
+        alphas = sorted(
+            (float(alpha) for alpha in alphas), key=lambda alpha: abs(alpha - 0.5)
+        )
+        seen = set()
+        alpha_pos = {pair_idx: 0 for pair_idx in range(len(bridge_pairs))}
+        pair_pos = 0
+        attempts = 0
+        while len(self.oracle_bridge_queue) < budget and attempts < budget * 4:
+            attempts += 1
+            pair_idx = pair_pos % len(bridge_pairs)
+            pair_pos += 1
+            alpha_idx = alpha_pos[pair_idx]
+            if alpha_idx >= len(alphas):
+                continue
+            alpha_pos[pair_idx] = alpha_idx + 1
+            alpha = alphas[alpha_idx]
+            _, rank, left_cls, right_cls, left_item, right_item = bridge_pairs[pair_idx]
+            left_idx = int(left_item["idx"])
+            right_idx = int(right_item["idx"])
+            left = self.last_candidates[left_idx : left_idx + 1]
+            right = self.last_candidates[right_idx : right_idx + 1]
+            candidate = quantize_tensor((1.0 - alpha) * left + alpha * right)
+            key = candidate.mul(255.0).round().to(torch.uint8).numpy().tobytes()
+            if key in seen:
+                continue
+            seen.add(key)
+            self.oracle_bridge_queue.append(
+                CandidateProposal(candidate.detach().cpu(), "bridge")
+            )
+            self.trace(
+                "oracle_bridge_candidate_queued",
+                round=self.round_idx,
+                left_candidate=left_idx,
+                right_candidate=right_idx,
+                left_prediction=left_cls,
+                right_prediction=right_cls,
+                left_runner_up=right_cls,
+                right_runner_up=left_cls,
+                left_oracle_gap=left_item["gap"],
+                right_oracle_gap=right_item["gap"],
+                left_oracle_source=left_item["source"],
+                right_oracle_source=right_item["source"],
+                pair_rank=rank,
+                alpha=alpha,
+            )
 
     def _candidate_distance_to_original(self, idx: int):
         original = quantize_tensor(self.base_tensor).detach().cpu()
@@ -547,7 +706,6 @@ class ChimeraSearch:
                     candidate=candidate_idx,
                     sweep=sweep_idx,
                     abs_margin=current_state.abs_margin,
-                    margin=current_state.margin,
                     competitor=current_state.competitor,
                 )
                 break
@@ -561,7 +719,6 @@ class ChimeraSearch:
                 candidate=candidate_idx,
                 sweep=sweep_idx,
                 abs_margin=current_state.abs_margin,
-                margin=current_state.margin,
                 competitor=current_state.competitor,
             )
             if current_state.abs_margin <= self.config.target_abs_margin:
@@ -574,6 +731,30 @@ class ChimeraSearch:
                 )
                 break
         return candidate, current_state
+
+    def _candidate_for_probe_slot(self, cand_idx: int) -> CandidateProposal:
+        if self.last_candidates is None and cand_idx == 0:
+            return CandidateProposal(self.current_tensor, "seed")
+
+        if self.oracle_bridge_queue:
+            proposal = self.oracle_bridge_queue.pop(0)
+            self.trace(
+                "oracle_bridge_candidate_used",
+                round=self.round_idx,
+                candidate=cand_idx,
+                remaining=len(self.oracle_bridge_queue),
+            )
+            return CandidateProposal(proposal.tensor.to(self.device), proposal.source)
+
+        return CandidateProposal(
+            self.tangent_kick_quantized(
+                self.current_tensor,
+                self.original_cls,
+                round_idx=self.round_idx,
+                candidate_idx=cand_idx,
+            ),
+            "tangent",
+        )
 
     def next_probe_batch(self) -> Dict[str, object]:
         if self.done:
@@ -606,24 +787,16 @@ class ChimeraSearch:
         candidates = []
         states = []
         for cand_idx in range(int(self.config.probe_batch_size)):
-            if cand_idx == 0:
-                candidate = self.current_tensor
-            else:
-                candidate = self.tangent_kick_quantized(
-                    self.current_tensor,
-                    self.original_cls,
-                    round_idx=self.round_idx,
-                    candidate_idx=cand_idx,
-                )
-
+            proposal = self._candidate_for_probe_slot(cand_idx)
+            candidate = proposal.tensor
             candidate = quantize_tensor(candidate)
             state = self.margin_state_quantized(candidate, self.original_cls)
             self.trace(
                 "candidate_pre_sweep",
                 round=self.round_idx,
                 candidate=cand_idx,
+                source=proposal.source,
                 abs_margin=state.abs_margin,
-                margin=state.margin,
                 competitor=state.competitor,
             )
             if state.abs_margin > self.config.target_abs_margin:
@@ -645,6 +818,8 @@ class ChimeraSearch:
                     "candidate_skip_sweep",
                     round=self.round_idx,
                     candidate=cand_idx,
+                    source=proposal.source,
+                    reason="target_reached",
                     abs_margin=state.abs_margin,
                     target_abs_margin=self.config.target_abs_margin,
                 )
@@ -657,7 +832,6 @@ class ChimeraSearch:
                     round=self.round_idx,
                     candidate=cand_idx,
                     abs_margin=state.abs_margin,
-                    margin=state.margin,
                     competitor=state.competitor,
                 )
 
@@ -670,7 +844,6 @@ class ChimeraSearch:
         self.trace(
             "probe_batch_ready",
             round=self.round_idx,
-            candidate_abs_margins=[s.abs_margin for s in states],
             best_abs_margin=self.best_state.abs_margin,
         )
         return self.with_trace({
@@ -744,7 +917,7 @@ class ChimeraSearch:
                 }
             )
 
-        self._seed_from_oracle_logits(
+        self._update_from_oracle_logits(
             blis_predictions=blis_predictions,
             openblas_predictions=openblas_predictions,
             blis_logits=blis_logits,
