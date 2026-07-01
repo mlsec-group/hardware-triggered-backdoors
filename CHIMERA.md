@@ -92,7 +92,7 @@ python3 scripts/download_cifar10.py
 Expected dataset path:
 
 ```text
-data/cifar10/data_batch_1
+data/cifar10
 ```
 
 Place the CIFAR-10 model checkpoint here:
@@ -109,13 +109,27 @@ For a local run on one machine, start the full server plus all three clients wit
 ./chimera_run.sh
 ```
 
-That uses backend names `generator`, `blis`, and `openblas`, and the default CIFAR batch at `data/cifar10/data_batch_1`.
+That uses backend names `generator`, `blis`, and `openblas`, and the default CIFAR dataset at `data/cifar10`.
 The runner checks that the BLIS image imports a BLIS-backed PyTorch and the OpenBLAS image imports an OpenBLAS-backed PyTorch before starting the campaign.
 
-To pass names or a different batch explicitly:
+To run the generator client on CUDA:
 
 ```bash
-./chimera_run.sh generator blis openblas data/cifar10/data_batch_1
+CHIMERA_GENERATOR_DEVICE=cuda ./chimera_run.sh
+```
+
+Use `auto` to use CUDA when available and otherwise fall back to CPU:
+
+```bash
+CHIMERA_GENERATOR_DEVICE=auto ./chimera_run.sh
+```
+
+Only the generator client uses this device setting. The BLIS and OpenBLAS oracle clients stay on CPU.
+
+To pass names or a different dataset path explicitly:
+
+```bash
+./chimera_run.sh generator blis openblas data/cifar10
 ```
 
 For a short smoke test:
@@ -158,7 +172,11 @@ sample-*/original.pt
 sample-*/candidate.pt
 sample-*/blis-output.pt
 sample-*/openblas-output.pt
+sample-*/original.png  success-only preview image
+sample-*/chimera.png   success-only preview image
 ```
+
+`sample-*` directories use the run-local order (`sample-0`, `sample-1`, ...). The original shuffled dataset id is stored as `dataset_index` in `result.json` and `summary.json`.
 
 ## Common knobs
 
@@ -171,7 +189,7 @@ sample-*/openblas-output.pt
 
 When `--dataset_path` points at a CIFAR-10 directory, Chimera loads all five training batches, shuffles them with the run seed, and then takes `--n_samples` starting at `--sample_index` as an offset into that shuffled order. Passing a single batch file still works for compatibility.
 
-The Chimera search defaults live in one place: `ChimeraSearchConfig` in `src/strategies/chimera_config.py`. Change `walk_rounds`, `probe_batch_size`, `sweep_coords_per_round`, or `gd_steps` there and rerun the pipeline.
+The Chimera defaults live in one place: `ChimeraSearchConfig` in `src/strategies/chimera_config.py`. Change `walk_rounds`, `probe_batch_size`, `sweep_coords_per_round`, `gd_steps`, or `save_preview_images` there and rerun the pipeline.
 
 With the current defaults, one job can probe up to `walk_rounds * probe_batch_size` candidates. Most samples stop earlier once a chimera is found.
 

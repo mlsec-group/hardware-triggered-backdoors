@@ -59,11 +59,12 @@ class ChimeraServer(ChimeraCLI, ServerStrategy):
         end = start + int(args.n_samples)
         self.samples = [
             (
+                run_idx,
                 int(source_indices[idx]),
                 torch.as_tensor(images[idx], dtype=torch.float32),
                 int(labels[idx]),
             )
-            for idx in order[start : min(end, len(order))]
+            for run_idx, idx in enumerate(order[start : min(end, len(order))])
         ]
         self._write_log(
             "Starting chimera run: "
@@ -246,7 +247,7 @@ class ChimeraServer(ChimeraCLI, ServerStrategy):
             f"max_rounds={int(self.search_config.walk_rounds)} "
             f"probe_batch_size={int(self.search_config.probe_batch_size)}"
         )
-        for job_id, (sample_index, image, label) in enumerate(self.samples):
+        for job_id, (sample_index, dataset_index, image, label) in enumerate(self.samples):
             scheduler.try_add_job(
                 ChimeraJob(
                     f"ChimeraJob-{job_id}-sample-{sample_index}",
@@ -255,6 +256,7 @@ class ChimeraServer(ChimeraCLI, ServerStrategy):
                     image=image,
                     label=label,
                     sample_index=sample_index,
+                    dataset_index=dataset_index,
                     seed=self.seed + job_id,
                     run_path=self.run_path,
                     log_path=self.log_path,
@@ -262,6 +264,7 @@ class ChimeraServer(ChimeraCLI, ServerStrategy):
                     blis_backend=self.blis_backend,
                     openblas_backend=self.openblas_backend,
                     max_rounds=int(self.search_config.walk_rounds),
+                    save_preview_images=bool(self.search_config.save_preview_images),
                 ),
                 callback=self.job_finished,
             )
@@ -274,13 +277,15 @@ class ChimeraServer(ChimeraCLI, ServerStrategy):
         errors = sum(1 for item in self.job_outputs if item.get("error"))
         if output.get("success"):
             self._write_log(
-                f"[data_batch:{output['sample_index']}] Chimera found! "
+                f"[sample:{output['sample_index']} "
+                f"dataset_index:{output.get('dataset_index')}] Chimera found! "
                 f"(total {chimeras})"
             )
             result = f"sample={output['sample_index']} found"
         else:
             self._write_log(
-                f"[data_batch:{output['sample_index']}] Chimera NOT found! "
+                f"[sample:{output['sample_index']} "
+                f"dataset_index:{output.get('dataset_index')}] Chimera NOT found! "
                 f"best_abs_margin={status.get('best_abs_margin')} "
                 f"round={status.get('round')}"
             )

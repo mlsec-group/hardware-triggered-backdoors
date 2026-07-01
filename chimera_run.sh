@@ -13,30 +13,99 @@ OPENBLAS_IMAGE="${CHIMERA_OPENBLAS_IMAGE:-apptainer/chimera-openblas.sif}"
 
 SERVER_PID=""
 CLIENT_PIDS=()
+CLEANED_UP=0
 
 cleanup() {
+    if [[ "$CLEANED_UP" == "1" ]]; then
+        return
+    fi
+    CLEANED_UP=1
+
+    trap - EXIT INT TERM
+
     for pid in "${CLIENT_PIDS[@]}"; do
         if kill -0 "$pid" 2>/dev/null; then
-            kill "$pid" 2>/dev/null || true
+            kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
         fi
     done
 
     if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
-        kill "$SERVER_PID" 2>/dev/null || true
+        kill -- "-$SERVER_PID" 2>/dev/null || kill "$SERVER_PID" 2>/dev/null || true
+    fi
+
+    if command -v docker >/dev/null 2>&1; then
+        docker ps --format '{{.ID}} {{.Image}} {{.Ports}}' \
+            | while read -r container_id image ports; do
+                if [[ "$image" == "diffmath-server" ]] && [[ "$ports" == *":${PORT}->"* ]]; then
+                    docker stop --time 2 "$container_id" >/dev/null 2>&1 || true
+                fi
+            done
+    fi
+
+    sleep 2
+    if command -v docker >/dev/null 2>&1; then
+        docker ps --format '{{.ID}} {{.Image}} {{.Ports}}' \
+            | while read -r container_id image ports; do
+                if [[ "$image" == "diffmath-server" ]] && [[ "$ports" == *":${PORT}->"* ]]; then
+                    docker kill "$container_id" >/dev/null 2>&1 || true
+                fi
+            done
+    fi
+
+    for pid in "${CLIENT_PIDS[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+        fi
+    done
+
+    if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
+        kill -KILL -- "-$SERVER_PID" 2>/dev/null || kill -KILL "$SERVER_PID" 2>/dev/null || true
     fi
 }
 
+interrupt() {
+    echo "Stopping Chimera run..."
+    cleanup
+    exit 130
+}
+
+ensure_port_available() {
+    python3 - "$1" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+for family, host in ((socket.AF_INET, "0.0.0.0"), (socket.AF_INET6, "::")):
+    try:
+        with socket.socket(family, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((host, port))
+    except OSError as exc:
+        print(f"Port {port} is already in use ({host}): {exc}", file=sys.stderr)
+        print("Stop the previous Chimera run or choose another CHIMERA_PORT/CHIMERA_HTTP_PORT.", file=sys.stderr)
+        sys.exit(1)
+PY
+}
+
 wait_for_server() {
-    python3 - "$SERVER_HOSTNAME" "$PORT" <<'PY'
+    python3 - "$SERVER_HOSTNAME" "$PORT" "$SERVER_PID" <<'PY'
+import os
 import socket
 import sys
 import time
 
 host = sys.argv[1]
 port = int(sys.argv[2])
+server_pid = int(sys.argv[3])
 deadline = time.time() + 180
 
 while time.time() < deadline:
+    try:
+        os.kill(server_pid, 0)
+    except OSError:
+        print(f"Chimera server process {server_pid} exited before opening {host}:{port}", file=sys.stderr)
+        sys.exit(1)
+
     try:
         with socket.create_connection((host, port), timeout=2):
             sys.exit(0)
@@ -99,12 +168,15 @@ PY
     done
 }
 
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap interrupt INT TERM
 
 check_backend_image
+ensure_port_available "$PORT"
+ensure_port_available "${CHIMERA_HTTP_PORT:-9696}"
 
 echo "Starting Chimera server on ${SERVER_HOSTNAME}:${PORT}"
-CHIMERA_NO_TTY=1 bash chimera_server.sh \
+setsid env CHIMERA_NO_TTY=1 bash chimera_server.sh \
     "$GENERATOR_BACKEND" \
     "$BLIS_BACKEND" \
     "$OPENBLAS_BACKEND" \
@@ -114,17 +186,17 @@ SERVER_PID="$!"
 wait_for_server
 
 echo "Starting Chimera clients"
-CHIMERA_CLIENT_IMAGE="$GENERATOR_IMAGE" bash chimera_client.sh \
+setsid env CHIMERA_CLIENT_IMAGE="$GENERATOR_IMAGE" bash chimera_client.sh \
     "$SERVER_HOSTNAME" \
     "$GENERATOR_BACKEND" &
 CLIENT_PIDS+=("$!")
 
-CHIMERA_CLIENT_IMAGE="$BLIS_IMAGE" bash chimera_client.sh \
+setsid env CHIMERA_CLIENT_IMAGE="$BLIS_IMAGE" bash chimera_client.sh \
     "$SERVER_HOSTNAME" \
     "$BLIS_BACKEND" &
 CLIENT_PIDS+=("$!")
 
-CHIMERA_CLIENT_IMAGE="$OPENBLAS_IMAGE" bash chimera_client.sh \
+setsid env CHIMERA_CLIENT_IMAGE="$OPENBLAS_IMAGE" bash chimera_client.sh \
     "$SERVER_HOSTNAME" \
     "$OPENBLAS_BACKEND" &
 CLIENT_PIDS+=("$!")

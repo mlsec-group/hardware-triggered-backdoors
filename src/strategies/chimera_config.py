@@ -23,3 +23,4 @@ class ChimeraSearchConfig:
     gd_momentum: float = 0.9
     gd_epsilon: float = 16.0 / 255.0
     oracle_guided_seed: bool = True
+    save_preview_images: bool = True

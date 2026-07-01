@@ -4,7 +4,9 @@ import time
 import uuid
 from typing import Dict, List, Optional
 
+import numpy as np
 import torch
+from PIL import Image
 
 from jobscheduler.client import ClientConfig
 from jobscheduler.job import Job
@@ -23,6 +25,7 @@ class ChimeraJob(Job):
         image: torch.Tensor,
         label: int,
         sample_index: int,
+        dataset_index: int,
         seed: int,
         run_path: str,
         log_path: Optional[str],
@@ -30,6 +33,7 @@ class ChimeraJob(Job):
         blis_backend: str,
         openblas_backend: str,
         max_rounds: int,
+        save_preview_images: bool,
     ):
         self.name = name
         self.client_configs = client_configs
@@ -37,6 +41,7 @@ class ChimeraJob(Job):
         self.image = image
         self.label = int(label)
         self.sample_index = int(sample_index)
+        self.dataset_index = int(dataset_index)
         self.seed = int(seed)
         self.run_path = run_path
         self.log_path = log_path
@@ -44,6 +49,7 @@ class ChimeraJob(Job):
         self.blis_backend = blis_backend
         self.openblas_backend = openblas_backend
         self.max_rounds = int(max_rounds)
+        self.save_preview_images = bool(save_preview_images)
         self.iteration = 0
         self.probe_trace = []
         self.search_trace = []
@@ -99,6 +105,27 @@ class ChimeraJob(Job):
     def _tensor_to_json(self, tensor: torch.Tensor):
         return tensor.detach().cpu().tolist()
 
+    def _save_tensor_png(self, tensor: torch.Tensor, path: str) -> None:
+        image = tensor.detach().cpu().to(torch.float32)
+        if image.ndim == 4:
+            image = image[0]
+        image = image.clamp(0.0, 1.0)
+        if image.ndim == 3:
+            if image.shape[0] in (1, 3):
+                image = image.permute(1, 2, 0)
+            if image.shape[-1] == 1:
+                image = image[..., 0]
+        array = (image.numpy() * 255.0 + 0.5).astype(np.uint8)
+        pil_image = Image.fromarray(array)
+        max_dim = max(pil_image.size)
+        if max_dim < 128:
+            scale = max(1, 256 // max_dim)
+            pil_image = pil_image.resize(
+                (pil_image.width * scale, pil_image.height * scale),
+                resample=Image.Resampling.NEAREST,
+            )
+        pil_image.save(path)
+
     def _save_result(self, status, blis_output=None, openblas_output=None):
         sample_dir = self._sample_dir()
         os.makedirs(sample_dir, exist_ok=True)
@@ -106,9 +133,16 @@ class ChimeraJob(Job):
         torch.save(self.image, os.path.join(sample_dir, "original.pt"))
 
         candidate_saved = False
+        preview_saved = False
         if "candidate" in status and isinstance(status["candidate"], torch.Tensor):
             torch.save(status["candidate"], os.path.join(sample_dir, "candidate.pt"))
             candidate_saved = True
+            if self.save_preview_images and status.get("success"):
+                self._save_tensor_png(self.image, os.path.join(sample_dir, "original.png"))
+                self._save_tensor_png(
+                    status["candidate"], os.path.join(sample_dir, "chimera.png")
+                )
+                preview_saved = True
 
         if blis_output is not None:
             torch.save(blis_output, os.path.join(sample_dir, "blis-output.pt"))
@@ -117,11 +151,13 @@ class ChimeraJob(Job):
 
         jsonable_status = self._jsonable_status(status)
         jsonable_status["candidate_saved"] = candidate_saved
+        jsonable_status["preview_saved"] = preview_saved
         with open(os.path.join(sample_dir, "result.json"), "w", encoding="utf-8") as f:
             json.dump(
                 {
                     "job": self.name,
                     "sample_index": self.sample_index,
+                    "dataset_index": self.dataset_index,
                     "label": self.label,
                     "status": jsonable_status,
                 },
@@ -157,7 +193,8 @@ class ChimeraJob(Job):
         )
         self._collect_search_trace(start_status)
         self._append_log(
-            f"[data_batch:{self.sample_index}] start label={self.label} "
+            f"[sample:{self.sample_index} dataset_index:{self.dataset_index}] "
+            f"start label={self.label} "
             f"original_class={start_status.get('original_class')} "
             f"initial_abs_margin={start_status.get('initial_abs_margin')}"
         )
@@ -182,7 +219,8 @@ class ChimeraJob(Job):
             candidates = gen_output["candidates"]
             candidate_abs_margins = gen_output.get("candidate_abs_margins")
             self._append_log(
-                f"[data_batch:{self.sample_index} ROUND:{round_idx}] "
+                f"[sample:{self.sample_index} dataset_index:{self.dataset_index} "
+                f"ROUND:{round_idx}] "
                 f"probing batch_size={int(candidates.shape[0])} "
                 f"best_abs_margin={gen_output.get('best_abs_margin')} "
                 f"candidate_abs_margins="
@@ -224,7 +262,8 @@ class ChimeraJob(Job):
             }
             self.probe_trace.append(round_trace)
             self._append_log(
-                f"[data_batch:{self.sample_index} PROBE:R{round_idx}] "
+                f"[sample:{self.sample_index} dataset_index:{self.dataset_index} "
+                f"PROBE:R{round_idx}] "
                 f"blis_pred={round_trace['blis_predictions']} "
                 f"openblas_pred={round_trace['openblas_predictions']} "
                 f"disagreement={round_trace['disagreement']}"
@@ -305,6 +344,7 @@ class ChimeraJob(Job):
         return {
             "job": self.name,
             "sample_index": self.sample_index,
+            "dataset_index": self.dataset_index,
             "success": bool(final_status.get("success", False)),
             "status": jsonable_status,
         }
