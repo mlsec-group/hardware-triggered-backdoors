@@ -127,7 +127,7 @@ CHIMERA_N_SAMPLES=1 ./chimera_run.sh
 For clients on different machines, start the server:
 
 ```bash
-bash chimera_server.sh generator blis openblas data/cifar10/data_batch_1
+bash chimera_server.sh generator blis openblas data/cifar10
 ```
 
 Then start the three clients:
@@ -163,10 +163,13 @@ sample-*/openblas-output.pt
 ## Common knobs
 
 ```text
+--dataset_path
 --sample_index
 --n_samples
 --generator_device cpu|cuda|auto
 ```
+
+When `--dataset_path` points at a CIFAR-10 directory, Chimera loads all five training batches, shuffles them with the run seed, and then takes `--n_samples` starting at `--sample_index` as an offset into that shuffled order. Passing a single batch file still works for compatibility.
 
 The Chimera search defaults live in one place: `ChimeraSearchConfig` in `src/strategies/chimera_config.py`. Change `walk_rounds`, `probe_batch_size`, `sweep_coords_per_round`, or `gd_steps` there and rerun the pipeline.
 
@@ -175,5 +178,5 @@ With the current defaults, one job can probe up to `walk_rounds * probe_batch_si
 `chimera_server.sh` runs 100 CIFAR samples by default. For a short smoke test, override the sample count without editing the script:
 
 ```bash
-CHIMERA_N_SAMPLES=1 bash chimera_server.sh generator blis openblas data/cifar10/data_batch_1
+CHIMERA_N_SAMPLES=1 bash chimera_server.sh generator blis openblas data/cifar10
 ```

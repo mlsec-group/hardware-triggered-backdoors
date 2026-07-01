@@ -3,7 +3,7 @@
 GENERATOR_BACKEND="$1"
 BLIS_BACKEND="$2"
 OPENBLAS_BACKEND="$3"
-CIFAR_BATCH="${4:-data/cifar10/data_batch_1}"
+DATASET_PATH="${4:-data/cifar10}"
 N_SAMPLES="${CHIMERA_N_SAMPLES:-100}"
 GENERATOR_DEVICE="${CHIMERA_GENERATOR_DEVICE:-cpu}"
 PORT="${CHIMERA_PORT:-13370}"
@@ -15,7 +15,7 @@ if [[ "${CHIMERA_NO_TTY:-}" == "1" || "${CHIMERA_NO_TTY:-}" == "true" ]]; then
 fi
 
 if [[ -z "$GENERATOR_BACKEND" || -z "$BLIS_BACKEND" || -z "$OPENBLAS_BACKEND" ]]; then
-    echo "usage: ./chimera_server.sh <generator_backend> <blis_backend> <openblas_backend> [cifar_batch]"
+    echo "usage: ./chimera_server.sh <generator_backend> <blis_backend> <openblas_backend> [dataset_path]"
     exit 1
 fi
 
@@ -33,7 +33,7 @@ python3 main.py \
     --generator_backend "$GENERATOR_BACKEND" \
     --blis_backend "$BLIS_BACKEND" \
     --openblas_backend "$OPENBLAS_BACKEND" \
-    --cifar_batch "$CIFAR_BATCH" \
+    --dataset_path "$DATASET_PATH" \
     --sample_index 0 \
     --n_samples "$N_SAMPLES" \
     --model_path models/cifar10/final.pt \

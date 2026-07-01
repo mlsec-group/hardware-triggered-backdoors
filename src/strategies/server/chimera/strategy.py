@@ -4,10 +4,11 @@ import os
 import time
 from typing import List, Union
 
+import numpy as np
 import torch
 
 from common.interface import DirConfig
-from datasets.cifar10 import load_cifar10_batch
+from datasets.cifar10 import load_cifar10_batches
 from jobscheduler.client import ClientConfig
 from jobscheduler.progresstracker import ProgressTracker
 from jobscheduler.scheduler import Scheduler
@@ -51,17 +52,25 @@ class ChimeraServer(ChimeraCLI, ServerStrategy):
                 + ", ".join(missing)
             )
 
-        images, labels = load_cifar10_batch(args.cifar_batch)
+        dataset_path = args.cifar_batch or args.dataset_path
+        images, labels, source_indices = load_cifar10_batches(dataset_path)
+        order = np.random.default_rng(int(seed)).permutation(len(labels))
         start = int(args.sample_index)
         end = start + int(args.n_samples)
         self.samples = [
-            (idx, torch.as_tensor(images[idx], dtype=torch.float32), int(labels[idx]))
-            for idx in range(start, min(end, len(images)))
+            (
+                int(source_indices[idx]),
+                torch.as_tensor(images[idx], dtype=torch.float32),
+                int(labels[idx]),
+            )
+            for idx in order[start : min(end, len(order))]
         ]
         self._write_log(
             "Starting chimera run: "
-            f"samples={len(self.samples)} sample_index={start} "
+            f"samples={len(self.samples)} sample_offset={start} "
             f"requested_n_samples={int(args.n_samples)} "
+            f"dataset_path={dataset_path} "
+            f"selection_seed={int(seed)} "
             f"generator={self.generator_backend} blis={self.blis_backend} "
             f"openblas={self.openblas_backend} model={args.model_path} "
             f"walk_rounds={int(self.search_config.walk_rounds)} "
@@ -188,6 +197,9 @@ class ChimeraServer(ChimeraCLI, ServerStrategy):
             "errors": errors,
             "requested_samples": int(self.args.n_samples),
             "actual_samples": len(self.samples),
+            "dataset_path": self.args.cifar_batch or self.args.dataset_path,
+            "sample_offset": int(self.args.sample_index),
+            "selection_seed": int(self.seed),
             "success_rate": None if processed == 0 else chimera / processed,
             "statistics": self._run_statistics(),
             "jobs": sorted(self.job_outputs, key=lambda item: item["sample_index"]),

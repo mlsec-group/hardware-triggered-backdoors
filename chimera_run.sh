@@ -4,7 +4,7 @@ set -euo pipefail
 GENERATOR_BACKEND="${1:-generator}"
 BLIS_BACKEND="${2:-blis}"
 OPENBLAS_BACKEND="${3:-openblas}"
-CIFAR_BATCH="${4:-data/cifar10/data_batch_1}"
+DATASET_PATH="${4:-data/cifar10}"
 SERVER_HOSTNAME="${CHIMERA_SERVER_HOSTNAME:-$(hostname)}"
 PORT="${CHIMERA_PORT:-13370}"
 GENERATOR_IMAGE="${CHIMERA_GENERATOR_IMAGE:-apptainer/chimera-generator.sif}"
@@ -108,7 +108,7 @@ CHIMERA_NO_TTY=1 bash chimera_server.sh \
     "$GENERATOR_BACKEND" \
     "$BLIS_BACKEND" \
     "$OPENBLAS_BACKEND" \
-    "$CIFAR_BATCH" &
+    "$DATASET_PATH" &
 SERVER_PID="$!"
 
 wait_for_server
