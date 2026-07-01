@@ -35,6 +35,7 @@ from jobscheduler.scheduler import Scheduler
 from scheduler.clients_manager import ClientsManager
 from strategies.server.backdoor.strategy import BackdoorServer
 from strategies.server.backdoor_defense.strategy import BackdoorDefenseServer
+from strategies.server.chimera.strategy import ChimeraServer
 from strategies.server.example.strategy import ExampleServer
 from strategies.server_strategy import ServerStrategy
 
@@ -137,6 +138,7 @@ def main():
         for c in [
             BackdoorServer,
             BackdoorDefenseServer,
+            ChimeraServer,
             ExampleServer,
         ]
     }

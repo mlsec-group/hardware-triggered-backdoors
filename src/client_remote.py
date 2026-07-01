@@ -13,16 +13,24 @@ from functools import partial, reduce
 import torch
 import torch.nn as nn
 from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
-from torchvision.models.efficientnet import EfficientNet, FusedMBConv, MBConv
-from torchvision.models.resnet import BasicBlock, ResNet
-from torchvision.models.vision_transformer import (
-    Encoder,
-    EncoderBlock,
-    MLPBlock,
-    VisionTransformer,
-)
-from torchvision.ops.misc import Conv2dNormActivation, SqueezeExcitation
-from torchvision.ops.stochastic_depth import StochasticDepth
+
+try:
+    from torchvision.models.efficientnet import EfficientNet, FusedMBConv, MBConv
+    from torchvision.models.resnet import BasicBlock, ResNet
+    from torchvision.models.vision_transformer import (
+        Encoder,
+        EncoderBlock,
+        MLPBlock,
+        VisionTransformer,
+    )
+    from torchvision.ops.misc import Conv2dNormActivation, SqueezeExcitation
+    from torchvision.ops.stochastic_depth import StochasticDepth
+except ImportError:
+    EfficientNet = FusedMBConv = MBConv = None
+    BasicBlock = ResNet = None
+    Encoder = EncoderBlock = MLPBlock = VisionTransformer = None
+    Conv2dNormActivation = SqueezeExcitation = None
+    StochasticDepth = None
 
 from common.interface import SHA256_SIZE, UINT_SIZE
 from common.network import (
@@ -286,38 +294,45 @@ def start_client(con: DebugCon, backend_name):
 
 
 def main():
-    torch.serialization.add_safe_globals(
-        [
+    safe_globals = [
+        set,
+        nn.AvgPool2d,
+        nn.AdaptiveAvgPool2d,
+        nn.BatchNorm2d,
+        nn.Conv2d,
+        nn.Dropout,
+        nn.GELU,
+        nn.LayerNorm,
+        nn.Linear,
+        nn.MaxPool2d,
+        nn.MultiheadAttention,
+        nn.ReLU,
+        nn.Sequential,
+        nn.SiLU,
+        nn.Sigmoid,
+        NonDynamicallyQuantizableLinear,
+        partial,
+    ]
+    safe_globals.extend(
+        cls
+        for cls in [
             EfficientNet,
-            set,
             Conv2dNormActivation,
             FusedMBConv,
             MBConv,
             StochasticDepth,
             SqueezeExcitation,
             BasicBlock,
-            nn.AvgPool2d,
-            nn.AdaptiveAvgPool2d,
-            nn.BatchNorm2d,
-            nn.Conv2d,
-            nn.Dropout,
-            nn.GELU,
-            nn.LayerNorm,
-            nn.Linear,
-            nn.MaxPool2d,
-            nn.MultiheadAttention,
-            nn.ReLU,
-            nn.Sequential,
-            nn.SiLU,
-            nn.Sigmoid,
             ResNet,
-            NonDynamicallyQuantizableLinear,
             VisionTransformer,
             Encoder,
             EncoderBlock,
             MLPBlock,
-            partial,
         ]
+        if cls is not None
+    )
+    torch.serialization.add_safe_globals(
+        safe_globals
     )
 
     parser = argparse.ArgumentParser(description="Argument Parser Example")
