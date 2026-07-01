@@ -703,6 +703,9 @@ class ChimeraSearch:
             return self.status(
                 extra={
                     "chimera_index": idx,
+                    "chimera_abs_margin": self.best_state.abs_margin,
+                    "chimera_margin": self.best_state.margin,
+                    "chimera_competitor": self.best_state.competitor,
                     "blis_prediction": int(blis_predictions[idx].item()),
                     "openblas_prediction": int(openblas_predictions[idx].item()),
                 }

@@ -138,6 +138,7 @@ class ChimeraJob(Job):
             json.dump(self.search_trace, f, indent=4)
 
     def run(self, worker_group: Dict[str, Worker]):
+        start_time = time.time()
         run_id = str(uuid.uuid4())
         workers = self._workers_by_identifier(worker_group)
         generator = workers[self.generator_backend]
@@ -154,7 +155,6 @@ class ChimeraJob(Job):
                 "seed": self.seed,
             },
         )
-        print("Chimera generator started:", start_status)
         self._collect_search_trace(start_status)
         self._append_log(
             f"[data_batch:{self.sample_index}] start label={self.label} "
@@ -181,10 +181,6 @@ class ChimeraJob(Job):
             self._collect_search_trace(gen_output)
             candidates = gen_output["candidates"]
             candidate_abs_margins = gen_output.get("candidate_abs_margins")
-            print(
-                f"Chimera round {round_idx}: probing {tuple(candidates.shape)} "
-                f"best_abs_margin={gen_output.get('best_abs_margin')}"
-            )
             self._append_log(
                 f"[data_batch:{self.sample_index} ROUND:{round_idx}] "
                 f"probing batch_size={int(candidates.shape[0])} "
@@ -213,14 +209,6 @@ class ChimeraJob(Job):
             blis_predictions = blis_output["predictions"]
             openblas_predictions = openblas_output["predictions"]
             disagreement = blis_predictions != openblas_predictions
-            print(
-                "Probe predictions:",
-                {
-                    "blis": blis_predictions.tolist(),
-                    "openblas": openblas_predictions.tolist(),
-                    "disagreement": disagreement.tolist(),
-                },
-            )
             round_trace = {
                 "round": round_idx,
                 "candidate_shape": list(candidates.shape),
@@ -262,6 +250,40 @@ class ChimeraJob(Job):
             if update_status.get("done"):
                 break
 
+        elapsed_seconds = time.time() - start_time
+        candidates_probed = sum(
+            int(item.get("candidate_shape", [0])[0]) for item in self.probe_trace
+        )
+        candidates_to_chimera = None
+        chimera_round = None
+        chimera_batch_index = None
+        chimera_candidate_abs_margin = None
+        candidates_before_round = 0
+        for item in self.probe_trace:
+            disagreement = item.get("disagreement") or []
+            if any(disagreement):
+                chimera_batch_index = int(disagreement.index(True))
+                chimera_round = int(item["round"])
+                candidates_to_chimera = candidates_before_round + chimera_batch_index + 1
+                candidate_abs_margins = item.get("candidate_abs_margins") or []
+                if chimera_batch_index < len(candidate_abs_margins):
+                    chimera_candidate_abs_margin = candidate_abs_margins[
+                        chimera_batch_index
+                    ]
+                break
+            candidates_before_round += int(item.get("candidate_shape", [0])[0])
+
+        final_status["elapsed_seconds"] = elapsed_seconds
+        final_status["probe_rounds"] = len(self.probe_trace)
+        final_status["candidates_probed"] = candidates_probed
+        final_status["candidates_to_chimera"] = candidates_to_chimera
+        final_status["chimera_round"] = chimera_round
+        final_status["chimera_batch_index"] = chimera_batch_index
+        final_status["chimera_candidate_abs_margin"] = chimera_candidate_abs_margin
+        final_status["chimera_candidate_margin"] = final_status.get("chimera_margin")
+        final_status["chimera_candidate_competitor"] = final_status.get(
+            "chimera_competitor"
+        )
         self._save_result(final_status, final_blis_output, final_openblas_output)
         candidate_saved = os.path.exists(
             os.path.join(self._sample_dir(), "candidate.pt")
