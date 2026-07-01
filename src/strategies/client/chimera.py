@@ -22,6 +22,8 @@ class ChimeraClient(ClientStrategy):
             if self.role == "generator"
             else torch.device("cpu")
         )
+        if self.role == "generator":
+            self._configure_generator_math(self.device)
 
         self.model = load_cifar_vgg(Path(args.model_path), self.device)
         self.model.to(self.device)
@@ -69,6 +71,19 @@ class ChimeraClient(ClientStrategy):
                 raise RuntimeError("--generator_device cuda requested but CUDA is unavailable")
             return torch.device("cuda")
         return torch.device("cpu")
+
+    def _configure_generator_math(self, device: torch.device) -> None:
+        if device.type != "cuda":
+            return
+
+        if hasattr(torch.backends, "cuda"):
+            torch.backends.cuda.matmul.allow_tf32 = False
+        if hasattr(torch.backends, "cudnn"):
+            torch.backends.cudnn.allow_tf32 = False
+        try:
+            torch.set_float32_matmul_precision("highest")
+        except (AttributeError, RuntimeError):
+            pass
 
     def _config(self) -> ChimeraSearchConfig:
         return ChimeraSearchConfig()

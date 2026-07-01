@@ -125,6 +125,7 @@ CHIMERA_GENERATOR_DEVICE=auto ./chimera_run.sh
 ```
 
 Only the generator client uses this device setting. The BLIS and OpenBLAS oracle clients stay on CPU.
+In CUDA mode, the generator disables TF32 so its boundary search stays close to the CPU BLAS oracle numerics.
 
 To pass names or a different dataset path explicitly:
 
