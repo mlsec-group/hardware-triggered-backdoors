@@ -13,6 +13,7 @@ class MarginState:
     margin: float
     competitor: int
 
+
 def quantize_tensor(tensor: torch.Tensor) -> torch.Tensor:
     return torch.floor(tensor.clamp(0, 1) * 255.0 + 0.5) / 255.0
 
@@ -511,6 +512,27 @@ class ChimeraSearch:
             prediction=int(blis_predictions[idx].item()),
         )
 
+    def _candidate_distance_to_original(self, idx: int):
+        original = quantize_tensor(self.base_tensor).detach().cpu()
+        candidate = self.last_candidates[idx : idx + 1].detach().cpu()
+        diff = (candidate - original).abs()
+        return {
+            "l0": int((diff > 0).sum().item()),
+            "l1": float(diff.sum().item()),
+            "linf": float(diff.max().item()) if diff.numel() else 0.0,
+        }
+
+    def _select_closest_disagreement(self, disagreements: torch.Tensor):
+        disagreement_indices = [
+            int(idx.item()) for idx in torch.nonzero(disagreements, as_tuple=False)
+        ]
+        ranked = []
+        for idx in disagreement_indices:
+            distance = self._candidate_distance_to_original(idx)
+            ranked.append((distance["l1"], distance["l0"], distance["linf"], idx, distance))
+        ranked.sort()
+        return ranked[0][3], [item[4] | {"candidate": item[3]} for item in ranked]
+
     def sweep_rounds(self, tensor, cls, state, rounds, *, round_idx=None, candidate_idx=None):
         candidate = quantize_tensor(tensor.detach())
         current_state = state
@@ -684,7 +706,10 @@ class ChimeraSearch:
             disagreement=disagreements.tolist(),
         )
         if bool(torch.any(disagreements).item()):
-            idx = int(torch.nonzero(disagreements, as_tuple=False)[0].item())
+            idx, disagreement_distances = self._select_closest_disagreement(
+                disagreements
+            )
+            chosen_distance = self._candidate_distance_to_original(idx)
             self.success = True
             self.done = True
             self.result_index = idx
@@ -696,6 +721,11 @@ class ChimeraSearch:
                 reason="chimera_found",
                 round=self.round_idx,
                 candidate=idx,
+                disagreement_candidates=[
+                    int(item.item())
+                    for item in torch.nonzero(disagreements, as_tuple=False)
+                ],
+                disagreement_distances=disagreement_distances,
                 blis_prediction=int(blis_predictions[idx].item()),
                 openblas_prediction=int(openblas_predictions[idx].item()),
                 best_abs_margin=self.best_state.abs_margin,
@@ -706,6 +736,9 @@ class ChimeraSearch:
                     "chimera_abs_margin": self.best_state.abs_margin,
                     "chimera_margin": self.best_state.margin,
                     "chimera_competitor": self.best_state.competitor,
+                    "chimera_l0_distance": chosen_distance["l0"],
+                    "chimera_l1_distance": chosen_distance["l1"],
+                    "chimera_linf_distance": chosen_distance["linf"],
                     "blis_prediction": int(blis_predictions[idx].item()),
                     "openblas_prediction": int(openblas_predictions[idx].item()),
                 }

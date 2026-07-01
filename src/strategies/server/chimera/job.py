@@ -262,7 +262,10 @@ class ChimeraJob(Job):
         for item in self.probe_trace:
             disagreement = item.get("disagreement") or []
             if any(disagreement):
-                chimera_batch_index = int(disagreement.index(True))
+                update_status = item.get("update_status", {})
+                chimera_batch_index = int(
+                    update_status.get("chimera_index", disagreement.index(True))
+                )
                 chimera_round = int(item["round"])
                 candidates_to_chimera = candidates_before_round + chimera_batch_index + 1
                 candidate_abs_margins = item.get("candidate_abs_margins") or []
@@ -283,6 +286,15 @@ class ChimeraJob(Job):
         final_status["chimera_candidate_margin"] = final_status.get("chimera_margin")
         final_status["chimera_candidate_competitor"] = final_status.get(
             "chimera_competitor"
+        )
+        final_status["chimera_candidate_l0_distance"] = final_status.get(
+            "chimera_l0_distance"
+        )
+        final_status["chimera_candidate_l1_distance"] = final_status.get(
+            "chimera_l1_distance"
+        )
+        final_status["chimera_candidate_linf_distance"] = final_status.get(
+            "chimera_linf_distance"
         )
         self._save_result(final_status, final_blis_output, final_openblas_output)
         candidate_saved = os.path.exists(

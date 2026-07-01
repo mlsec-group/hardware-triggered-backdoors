@@ -147,6 +147,18 @@ class ChimeraServer(ChimeraCLI, ServerStrategy):
                 ),
                 "candidates_to_chimera": self._numeric_stats(candidates_to_chimera),
                 "chimeras_found_within_candidates": found_within,
+                "chimera_candidate_l0_distance": self._numeric_stats(
+                    status.get("chimera_candidate_l0_distance")
+                    for status in success_statuses
+                ),
+                "chimera_candidate_l1_distance": self._numeric_stats(
+                    status.get("chimera_candidate_l1_distance")
+                    for status in success_statuses
+                ),
+                "chimera_candidate_linf_distance": self._numeric_stats(
+                    status.get("chimera_candidate_linf_distance")
+                    for status in success_statuses
+                ),
             },
         }
 
@@ -274,6 +286,7 @@ class ChimeraServer(ChimeraCLI, ServerStrategy):
         chimera_margin_stats = statistics["margins"]["chimera_candidate_abs_margin"]
         candidate_stats = statistics["search"]["candidates_to_chimera"]
         probed_stats = statistics["search"]["candidates_probed"]
+        l0_stats = statistics["search"]["chimera_candidate_l0_distance"]
         totals = {
             "processed": len(self.job_outputs),
             "attempted": sum(
@@ -293,6 +306,7 @@ class ChimeraServer(ChimeraCLI, ServerStrategy):
             f"\n  elapsed_seconds: {statistics['elapsed_seconds']:.2f}"
             f"\n  success_best_abs_margin: {self._format_stat_quad(margin_stats)}"
             f"\n  chimera_candidate_abs_margin: {self._format_stat_quad(chimera_margin_stats)}"
+            f"\n  chimera_candidate_l0_distance: {self._format_stat_quad(l0_stats)}"
             f"\n  candidates_to_chimera: {self._format_stat_quad(candidate_stats)}"
             f"\n  candidates_probed: {self._format_stat_quad(probed_stats)}"
             f"\n  chimeras_found_within_candidates: "
